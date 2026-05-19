@@ -43,6 +43,8 @@ Inclua em OSDMain.cpp: #include "NetworkMenu.h"
 #include <cerrno>
 #include <string>
 #include <vector>
+
+#include <dirent.h>
 using namespace std;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -455,12 +457,25 @@ void NetworkMenu::prepareForNetwork() {
     }
 }
 
-void NetworkMenu::restoreAfterNetwork() {
+/*void NetworkMenu::restoreAfterNetwork() {
     s_network_session = false;
     if (!s_sd_released_for_net) return;
     s_sd_released_for_net = false;
     ESP_LOGI("NET", "Remontando SD apos menu rede");
     FileUtils::initFileSystem();
+}*/
+
+void NetworkMenu::restoreAfterNetwork() {
+    ESP_LOGI("NET", "restoreAfterNetwork: s_sd_released=%d s_network=%d SDReady=%d",
+        s_sd_released_for_net ? 1 : 0,
+        s_network_session ? 1 : 0,
+        FileUtils::SDReady ? 1 : 0);
+    s_network_session = false;
+    if (!s_sd_released_for_net) return;
+    s_sd_released_for_net = false;
+    ESP_LOGI("NET", "Remontando SD...");
+    FileUtils::initFileSystem();
+    ESP_LOGI("NET", "SDReady apos remonte: %d", FileUtils::SDReady ? 1 : 0);
 }
 
 bool NetworkMenu::wifiConnect(const string &ssid, const string &pass) {
@@ -1045,21 +1060,21 @@ void NetworkMenu::ftpConfig() {
     NetConfig cfg = loadConfig();
 
     string host = OSD::input(3, 3, NET_LBL_HOST[Config::lang],
-        cfg.ftp_host, 6, 64, zxColor(7,1), zxColor(1,0), false);
+        cfg.ftp_host, 20, 64, zxColor(7,1), zxColor(1,0), false);
     if (host.empty()) return; // ESC
     cfg.ftp_host = sanitizeHost(host);
     if (cfg.ftp_host.empty()) return;
 
     string user = OSD::input(3, 4, NET_LBL_USER[Config::lang],
-        cfg.ftp_user, 6, 32, zxColor(7,1), zxColor(1,0), false);
+        cfg.ftp_user, 20, 32, zxColor(7,1), zxColor(1,0), false);
     if (!user.empty()) cfg.ftp_user = user;
 
     string pass = OSD::input(3, 5, NET_LBL_FTPPASS[Config::lang],
-        cfg.ftp_pass, 6, 64, zxColor(7,1), zxColor(1,0), false);
+        cfg.ftp_pass, 20, 64, zxColor(7,1), zxColor(1,0), false);
     cfg.ftp_pass = pass;
 
     string path = OSD::input(3, 6, NET_LBL_PATH[Config::lang],
-        cfg.ftp_path, 6, 128, zxColor(7,1), zxColor(1,0), false);
+        cfg.ftp_path, 20, 128, zxColor(7,1), zxColor(1,0), false);
     if (!path.empty()) cfg.ftp_path = path;
 
     saveConfig(cfg);
@@ -1106,6 +1121,9 @@ void NetworkMenu::ftpBrowser() {
 
     while (true) {
         showWifiStatusOverlay(NET_MSG_FTP_LISTING[Config::lang], LEVEL_INFO);
+
+        ESP_LOGI("FTP", "Heap livre antes menuRun: %d bytes", 
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 
         vector<string> entries = ftpList(ctrl, cur_path);
 
@@ -1188,15 +1206,35 @@ void NetworkMenu::ftpBrowser() {
                             selected.substr(0, 34),
                             MSGDIALOG_YESNO
                         );
-                        if (load == DLG_YES) {
-                            restoreAfterNetwork();
-                            if (netLoadDownloadedFile(dest)) {
-                                s_exit_osd_after_load = true;
-                            } else {
-                                OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
-                            }
-                            ftpDisconnect(ctrl);
-                            return;
+                      if (load == DLG_YES) {
+                        restoreAfterNetwork();
+                        
+                        // Debug SD
+                        ESP_LOGI("FTP", "SDReady=%d", FileUtils::SDReady ? 1 : 0);
+                        struct stat st;
+                        if (stat(dest.c_str(), &st) == 0) {
+                            ESP_LOGI("FTP", "Arquivo existe: %s (%ld bytes)", dest.c_str(), st.st_size);
+                        } else {
+                            ESP_LOGE("FTP", "Arquivo NAO existe: %s errno=%d", dest.c_str(), errno);
+                        }
+                        DIR *dir = opendir("/sd");
+                        if (dir) {
+                            struct dirent *e;
+                            while ((e = readdir(dir)) != NULL)
+                                ESP_LOGI("FTP", "SD: %s", e->d_name);
+                            closedir(dir);
+                        } else {
+                            ESP_LOGE("FTP", "opendir /sd falhou errno=%d", errno);
+                        }
+
+                        if (netLoadDownloadedFile(dest)) {
+                            s_exit_osd_after_load = true;
+                            OSD::restoreBackbufferData();
+                        } else {
+                            OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
+                        }
+                        ftpDisconnect(ctrl);
+                        return;
                         }
                     }
                 } else {
