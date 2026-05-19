@@ -3140,6 +3140,7 @@ void OSD::do_OSD(fabgl::VirtualKey KeytoESP, bool CTRL, bool SHIFT) {
                 // ***********************************************************************************
                 // NETWORK MENU
                 // ***********************************************************************************
+                NetworkMenu::prepareForNetwork();
                 menu_saverect = true;
                 menu_curopt = 1;
                 while (1) {
@@ -3159,11 +3160,21 @@ void OSD::do_OSD(fabgl::VirtualKey KeytoESP, bool CTRL, bool SHIFT) {
                         NetworkMenu::ftpBrowser();
                         menu_curopt = 3;
                         menu_saverect = false;
+                        if (NetworkMenu::shouldExitOsdAfterLoad()) {
+                            NetworkMenu::clearExitOsdAfterLoad();
+                            break;
+                        }
                     }
                     else {
                         menu_curopt = 7;
                         break;
                     }
+                }
+                NetworkMenu::restoreAfterNetwork();
+                if (NetworkMenu::shouldExitOsdAfterLoad()) {
+                    NetworkMenu::clearExitOsdAfterLoad();
+                    if (VIDEO::OSD) OSD::drawStats();
+                    return;
                 }
             }
             else if (opt == 8) { // Help

@@ -48,6 +48,7 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #include "hardpins.h"
 #include "messages.h"
 #include "OSDMain.h"
+#include "NetworkMenu.h"
 #include "roms.h"
 #include "Video.h"
 #include "ZXKeyb.h"
@@ -104,7 +105,7 @@ size_t FileUtils::fileSize(const char * mFile) {
     return stat_buf.st_size;
 }
 
-void FileUtils::initFileSystem() {
+void FileUtils::initFileSystem(bool force_wifi_pause) {
 
     // // Try to mount SD card on LILYGO TTGO VGA32 Board or ESPectrum Board
     // if (!SDReady) SDReady = mountSDCard(PIN_NUM_MISO_LILYGO_ESPECTRUM,PIN_NUM_MOSI_LILYGO_ESPECTRUM,PIN_NUM_CLK_LILYGO_ESPECTRUM,PIN_NUM_CS_LILYGO_ESPECTRUM);
@@ -112,11 +113,17 @@ void FileUtils::initFileSystem() {
     // // Try to mount SD card on Olimex ESP32-SBC-FABGL Board
     // if ((!ZXKeyb::Exists) && (!SDReady)) SDReady = mountSDCard(PIN_NUM_MISO_SBCFABGL,PIN_NUM_MOSI_SBCFABGL,PIN_NUM_CLK_SBCFABGL,PIN_NUM_CS_SBCFABGL);
 
-    if (!SDReady) SDReady = mountSDCard(Config::Board == BOARD_OLIMEX ? PIN_NUM_MISO_SBCFABGL : PIN_NUM_MISO_LILYGO_ESPECTRUM, PIN_NUM_MOSI_LILYGO_ESPECTRUM, PIN_NUM_CLK_LILYGO_ESPECTRUM, PIN_NUM_CS_LILYGO_ESPECTRUM);
+    if (!SDReady) SDReady = mountSDCard(
+        Config::Board == BOARD_OLIMEX ? PIN_NUM_MISO_SBCFABGL : PIN_NUM_MISO_LILYGO_ESPECTRUM,
+        PIN_NUM_MOSI_LILYGO_ESPECTRUM, PIN_NUM_CLK_LILYGO_ESPECTRUM, PIN_NUM_CS_LILYGO_ESPECTRUM,
+        force_wifi_pause);
 
 }
 
-bool FileUtils::mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS) {
+bool FileUtils::mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS, bool force_wifi_pause) {
+
+    const bool pause_wifi = force_wifi_pause || !NetworkMenu::isNetworkSession();
+    if (pause_wifi) NetworkMenu::wifiPauseForSd();
 
     // Init SD Card
     esp_err_t ret;
@@ -139,9 +146,10 @@ bool FileUtils::mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS)
     };
 
     ret = spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH1);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         printf("SD Card init: Failed to initialize bus.\n");
         vTaskDelay(20 / portTICK_PERIOD_MS);
+        if (pause_wifi) NetworkMenu::wifiResumeAfterSd();
         return false;
     }
 
@@ -166,6 +174,7 @@ bool FileUtils::mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS)
         }
         spi_bus_free(SPI2_HOST);
         vTaskDelay(20 / portTICK_PERIOD_MS);
+        if (pause_wifi) NetworkMenu::wifiResumeAfterSd();
         return false;
     }
 
@@ -180,6 +189,8 @@ bool FileUtils::mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS)
 
     vTaskDelay(20 / portTICK_PERIOD_MS);
 
+    // Com force_wifi_pause o chamador (FTP) mantém WiFi parado durante fwrite
+    if (pause_wifi && !force_wifi_pause) NetworkMenu::wifiResumeAfterSd();
     return true;
 
 }
@@ -194,16 +205,29 @@ void FileUtils::unmountSDCard() {
 }
 
 bool FileUtils::isMountedSDCard() {
-    // Dirty SDCard mount detection
-    DIR* dir = opendir("/sd");
-    if ( !dir ) return false;
-    struct dirent* de = readdir(dir);
-    if ( !de && ( errno == EIO || errno == EBADF ) ) {
+    // Dirty SDCard mount detection (retry before reporting failure)
+    for (int attempt = 0; attempt < 3; attempt++) {
+        DIR* dir = opendir("/sd");
+        if ( !dir ) {
+            if (attempt < 2) {
+                vTaskDelay(10 / portTICK_PERIOD_MS);
+                continue;
+            }
+            return false;
+        }
+        struct dirent* de = readdir(dir);
+        if ( !de && ( errno == EIO || errno == EBADF ) ) {
+            closedir(dir);
+            if (attempt < 2) {
+                vTaskDelay(10 / portTICK_PERIOD_MS);
+                continue;
+            }
+            return false;
+        }
         closedir(dir);
-        return false;
+        return true;
     }
-    closedir(dir);
-    return true;
+    return false;
 }
 
 bool FileUtils::isSDReady() {
@@ -576,6 +600,10 @@ void FileUtils::DirToFile(string fpath, uint8_t ftype, unsigned long hash, unsig
                     items_processed++;
 
                     OSD::progressDialog("","",(float) 100 / ((float) item_count / (float) items_processed),1);
+
+                    if ((items_processed & 0x3F) == 0) {
+                        vTaskDelay(1);
+                    }
 
                 } else {
                     if ( !de ) eof2 = true;

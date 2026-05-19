@@ -4,8 +4,6 @@ ESPectrum Fork — NetworkMenu.h
 Menu de Acesso à Rede: WiFi + cliente FTP browser.
 Configurações salvas em NVS, namespace "storage" (igual ao ESPConfig).
 
-Coloque em: include/NetworkMenu.h
-
 */
 
 #ifndef ESPECTRUM_NETWORKMENU_H
@@ -24,6 +22,19 @@ public:
 
     static bool wifi_connected; // exposto para o event handler
 
+    // Pausa WiFi durante I/O SD pesado (contador aninhado)
+    static void wifiPauseForSd();
+    static void wifiResumeAfterSd();
+
+    // Liberta barramento SD antes de WiFi/FTP (jogo ja em RAM)
+    static void prepareForNetwork();
+    static void restoreAfterNetwork();
+    static bool isNetworkSession();
+
+    // true apos carregar jogo do FTP — OSDMain deve sair do menu (return)
+    static bool shouldExitOsdAfterLoad();
+    static void clearExitOsdAfterLoad();
+
 private:
     // ── Config NVS ──────────────────────────────────────────────────────────
     struct NetConfig {
@@ -40,7 +51,9 @@ private:
     static void      saveConfig(const NetConfig &cfg);
 
     // ── WiFi ─────────────────────────────────────────────────────────────────
+    static bool wifiInitOnce();
     static bool wifiConnect(const string &ssid, const string &pass);
+    static bool ensureWifiReady(const string &ssid, const string &pass);
 
     // ── FTP Client ───────────────────────────────────────────────────────────
     static int  ftpConnect(const string &host, int port,

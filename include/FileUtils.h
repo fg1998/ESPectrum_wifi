@@ -70,8 +70,9 @@ public:
 
     static size_t fileSize(const char * mFile);
 
-    static void initFileSystem();
-    static bool mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS);
+    static void initFileSystem(bool force_wifi_pause = false);
+    static bool mountSDCard(int PIN_MISO, int PIN_MOSI, int PIN_CLK, int PIN_CS,
+                            bool force_wifi_pause = false);
     static void unmountSDCard();
 
     static bool isMountedSDCard();

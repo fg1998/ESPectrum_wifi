@@ -44,6 +44,7 @@ using namespace std;
 
 #include "OSDMain.h"
 #include "FileUtils.h"
+#include "NetworkMenu.h"
 #include "ESPConfig.h"
 #include "ESPectrum.h"
 #include "cpuESP.h"
@@ -183,7 +184,14 @@ unsigned long getLong(char *buffer) {
 }
 
 // Run a new file menu
+static string fileDialogEnd(const string &result) {
+    NetworkMenu::wifiResumeAfterSd();
+    return result;
+}
+
 string OSD::fileDialog(string &fdir, string title, uint8_t ftype, uint8_t mfcols, uint8_t mfrows, uint8_t actions) {
+
+    NetworkMenu::wifiPauseForSd();
 
     // struct stat stat_buf;
     long dirfilesize;
@@ -360,7 +368,7 @@ reset:
             OSD::restoreBackbufferData();
 
             click();
-            return "";
+            return fileDialogEnd("");
 
         }
 
@@ -446,7 +454,7 @@ reset:
                 OSD::restoreBackbufferData();
                 click();
 
-                return "";
+                return fileDialogEnd("");
             }
 
             fseek(dirfile,0,SEEK_END);
@@ -699,7 +707,7 @@ reset:
                                 if (res == DLG_YES) {
                                     fclose(dirfile);
                                     dirfile = NULL;
-                                    return new_file;
+                                    return fileDialogEnd(new_file);
                                 }
 
                             }
@@ -1115,7 +1123,7 @@ reset:
                                         fclose(dirfile);
                                         dirfile = NULL;
                                         click();
-                                        return "";
+                                        return fileDialogEnd("");
                                     }
                                 }
                             } else {
@@ -1239,9 +1247,9 @@ reset:
                             click();
 
                             if ((Menukey.SHIFT && Menukey.vk == fabgl::VK_RETURN) || Menukey.vk == fabgl::VK_JOY1C || Menukey.vk == fabgl::VK_JOY2C)
-                                return "S" + filedir;
+                                return fileDialogEnd("S" + filedir);
                             else
-                                return "R" + filedir;
+                                return fileDialogEnd("R" + filedir);
 
                         }
 
@@ -1252,7 +1260,7 @@ reset:
                         fclose(dirfile);
                         dirfile = NULL;
                         click();
-                        return "";
+                        return fileDialogEnd("");
                     }
                 }
 

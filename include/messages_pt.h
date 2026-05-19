@@ -203,6 +203,8 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define NET_MSG_DOWNLOAD_OK_PT      "Download OK!"
 #define NET_MSG_DOWNLOAD_FAIL_PT    "Erro no download"
 #define NET_DLG_DOWNLOAD_PT         "Baixar arquivo?"
+#define NET_DLG_LOAD_GAME_PT        "Carregar jogo?"
+#define NET_MSG_FILE_TOO_LARGE_PT   "Arquivo muito grande"
 #define NET_LBL_SSID_PT             "SSID: "
 #define NET_LBL_PASS_PT             "Senha: "
 #define NET_LBL_HOST_PT             "Host: "
