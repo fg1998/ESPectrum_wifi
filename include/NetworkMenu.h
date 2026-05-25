@@ -66,6 +66,7 @@ private:
     static bool ftpReadLine(int sock, char *buf, int maxlen);
     static int  ftpGetResponse(int sock, char *rbuf, int rlen);
     static bool ftpSendCmd(int sock, const char *cmd);
+    static void ftpSearch(int ctrl, const string &base_path);
 };
 
 #endif // ESPECTRUM_NETWORKMENU_H

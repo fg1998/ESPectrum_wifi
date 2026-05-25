@@ -1085,6 +1085,127 @@ void NetworkMenu::ftpConfig() {
 // Menu: Browser FTP
 // ═════════════════════════════════════════════════════════════════════════════
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FTP Search — busca por nome no servidor (NLST com wildcard)
+// ═════════════════════════════════════════════════════════════════════════════
+
+void NetworkMenu::ftpSearch(int ctrl, const string &base_path) {
+    string term = OSD::input(3, 3,
+        "Buscar: ", "",
+        20, 32, zxColor(7,1), zxColor(1,0), false);
+    if (term.empty()) return;
+
+    // Muda para o diretório base
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "CWD %s", base_path.c_str());
+    ftpSendCmd(ctrl, cmd);
+    ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
+
+    int dsock = ftpPasv(ctrl);
+    if (dsock < 0) {
+        OSD::osdCenteredMsg("Erro PASV", LEVEL_ERROR, 1500);
+        return;
+    }
+
+    showWifiStatusOverlay("Buscando...", LEVEL_INFO);
+
+    snprintf(cmd, sizeof(cmd), "NLST *%s*", term.c_str());
+    //snprintf(cmd, sizeof(cmd), "NLST");
+
+    ESP_LOGI("FTP", "Enviando comando: %s", cmd);
+    ftpSendCmd(ctrl, cmd);
+    int code = ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
+    ESP_LOGI("FTP", "Resposta: %d %s", code, ftp_resp);
+
+    hideWifiStatusOverlay();
+
+    if (code != 125 && code != 150) {
+        close(dsock);
+        OSD::osdCenteredMsg("Nenhum resultado", LEVEL_WARN, 1500);
+        return;
+    }
+
+    // Le resultados — maximo 10
+    vector<string> results;
+    char lbuf[512];
+    int pos = 0;
+    char c;
+    while (results.size() < 10) {
+        int r = recv(dsock, &c, 1, 0);
+        if (r <= 0) break;
+        if (c == '\n') {
+            if (pos > 0 && lbuf[pos-1] == '\r') pos--;
+            lbuf[pos] = 0;
+            if (pos > 0) {
+                string entry(lbuf);
+                size_t sl = entry.rfind('/');
+                if (sl != string::npos) entry = entry.substr(sl + 1);
+                if (!entry.empty()) results.push_back(entry);
+            }
+            pos = 0;
+        } else {
+            if (pos < 511) lbuf[pos++] = c;
+        }
+    }
+    close(dsock);
+    ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
+
+    if (results.empty()) {
+        OSD::osdCenteredMsg("Nenhum resultado", LEVEL_WARN, 1500);
+        return;
+    }
+
+    // Monta menu com resultados
+    string smenu = "Resultados\n";
+    for (const string &r : results)
+        smenu += r.substr(0, 38) + "\n";
+
+    OSD::menu_level    = 1;
+    OSD::menu_curopt   = 1;
+    OSD::menu_saverect = true;
+
+    uint8_t sel = OSD::menuRun(smenu);
+    if (sel == 0) return;
+
+    int idx = sel - 1;
+    if (idx < 0 || idx >= (int)results.size()) return;
+
+    string selected  = results[idx];
+    string full_path = base_path;
+    if (full_path.back() != '/') full_path += '/';
+    full_path += selected;
+
+    uint8_t res = OSD::msgDialog(
+        NET_DLG_DOWNLOAD[Config::lang],
+        selected.substr(0, 34),
+        MSGDIALOG_YESNO
+    );
+    if (res != DLG_YES) return;
+
+    const string dest = netFtpDestPath(selected);
+    if (ftpDownload(ctrl, full_path, dest)) {
+        OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_OK[Config::lang], LEVEL_OK, 1500);
+        if (netFileIsGame(dest)) {
+            uint8_t load = OSD::msgDialog(
+                NET_DLG_LOAD_GAME[Config::lang],
+                selected.substr(0, 34),
+                MSGDIALOG_YESNO
+            );
+            if (load == DLG_YES) {
+                restoreAfterNetwork();
+                if (netLoadDownloadedFile(dest)) {
+                    s_exit_osd_after_load = true;
+                } else {
+                    OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
+                }
+            }
+        }
+    } else {
+        OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
+    }
+}
+
 void NetworkMenu::ftpBrowser() {
     NetConfig cfg = loadConfig();
 
@@ -1118,6 +1239,23 @@ void NetworkMenu::ftpBrowser() {
     string cur_path = cfg.ftp_path;
     // Remove trailing slash (exceto raiz)
     while (cur_path.size() > 1 && cur_path.back() == '/') cur_path.pop_back();
+
+    // Menu: Navegar ou Buscar
+    {
+        OSD::menu_level    = 1;
+        OSD::menu_curopt   = 1;
+        OSD::menu_saverect = true;
+        uint8_t mode = OSD::menuRun("Acesso FTP\nNavegar\nBuscar arquivo\n");
+        if (mode == 0) {
+            ftpDisconnect(ctrl);
+            return;
+        }
+        if (mode == 2) {
+            ftpSearch(ctrl, cur_path);
+            ftpDisconnect(ctrl);
+            return;
+        }
+    }
 
     while (true) {
         showWifiStatusOverlay(NET_MSG_FTP_LISTING[Config::lang], LEVEL_INFO);
