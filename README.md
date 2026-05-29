@@ -1,22 +1,30 @@
 ![ESPectrum](https://zxespectrum.speccy.org/wp-content/uploads/2023/05/ESPectrum-logo-v02-2.png)
 
 -- PORTUGUÊS --
+
 ATENÇÃO !!! ESSA É UMA VERSÃO DE TESTES - POC - PARA VERIFICAR A POSSIBILIDADE DE ACESSO AO world of Spectrum usando o wifi do esp32.
 Testado apenas na LillyGo ESP32 VGA
+
 para atualizar : 
+
 * baixe o arquivo firmware.upg em releases
 * Grave o arquivo no SD Card
 * utilize a opção  F1 -> opções -> atualizar -> Firmware
+
 Um novo item do menu F1 irá aparecer - Acesso a Rede
 Depois disso coloque suas credenciais de wifi
+
 Coloque o proxy -> utilize http://alternativebits.com/wos.php
 Busque o arquivo que deseja e aproveite !
+
 USE POR SUA CONTA E RISCO !
 REPOSITÓRIO ORIGINAL DO ESPECTRUM - https://github.com/EremusOne/ESPectrum
 
 --ENGLISH--
+
 ATTENTION!!! THIS IS A TEST / PROOF-OF-CONCEPT (POC) VERSION TO VERIFY THE POSSIBILITY OF ACCESSING World of Spectrum USING THE ESP32 WIFI CONNECTION.
 Tested only on the LillyGo ESP32 VGA.
+
 To update:
 
 * Download the `firmware.upg` file from Releases.
