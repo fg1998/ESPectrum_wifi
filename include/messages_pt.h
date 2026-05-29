@@ -185,8 +185,8 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define MENU_NET_PT \
     "Acesso Rede\n"\
     "Config. WiFi\t>\n"\
-    "Config. FTP\t>\n"\
-    "Acessar FTP\t>\n"
+    "Config. Proxy\t>\n"\
+    "Buscar WoS\t>\n"
 
 #define NET_MSG_WIFI_CONNECTING_PT  "Conectando WiFi..."
 #define NET_MSG_WIFI_OK_PT          "WiFi conectado!"
@@ -211,6 +211,7 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define NET_LBL_USER_PT             "Usuario: "
 #define NET_LBL_FTPPASS_PT          "Senha: "
 #define NET_LBL_PATH_PT             "Caminho: "
+#define NET_LBL_PROXY_PT            "Proxy: "
 
 #define MENU_OPTIONS_PT \
     "Menu op\x87\x94" "es\n"\

@@ -203,8 +203,8 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define MENU_NET_EN \
     "Network\n"\
     "WiFi Setup\t>\n"\
-    "FTP Setup\t>\n"\
-    "FTP Browser\t>\n"
+    "Proxy Setup\t>\n"\
+    "Search WoS\t>\n"
 
 #define NET_MSG_WIFI_CONNECTING_EN  "Connecting WiFi..."
 #define NET_MSG_WIFI_OK_EN          "WiFi connected!"
@@ -229,6 +229,7 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define NET_LBL_USER_EN             "User: "
 #define NET_LBL_FTPPASS_EN          "Password: "
 #define NET_LBL_PATH_EN             "Path: "
+#define NET_LBL_PROXY_EN            "Proxy: "
 
 #define MENU_OPTIONS_EN \
     "Options menu\n"\

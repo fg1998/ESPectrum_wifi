@@ -232,6 +232,7 @@ static const char *NET_LBL_HOST[NLANGS]            = { NET_LBL_HOST_EN,         
 static const char *NET_LBL_USER[NLANGS]            = { NET_LBL_USER_EN,            NET_LBL_USER_ES,            NET_LBL_USER_PT            };
 static const char *NET_LBL_FTPPASS[NLANGS]         = { NET_LBL_FTPPASS_EN,         NET_LBL_FTPPASS_ES,         NET_LBL_FTPPASS_PT         };
 static const char *NET_LBL_PATH[NLANGS]            = { NET_LBL_PATH_EN,            NET_LBL_PATH_ES,            NET_LBL_PATH_PT            };
+static const char *NET_LBL_PROXY[NLANGS]           = { NET_LBL_PROXY_EN,           NET_LBL_PROXY_ES,           NET_LBL_PROXY_PT           };
 
 static const char *MENU_OPTIONS[NLANGS] = { MENU_OPTIONS_EN,MENU_OPTIONS_ES,MENU_OPTIONS_PT};
 

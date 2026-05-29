@@ -17,6 +17,7 @@ class NetworkMenu {
 public:
     // Chamados pelo dispatcher em OSDMain.cpp (opt == 7 do menu principal)
     static void wifiConfig();
+    static void proxyConfig();
     static void ftpConfig();
     static void ftpBrowser();
     static void wosSearch();
@@ -47,6 +48,7 @@ private:
         string ftp_pass  = "guest";
         string ftp_path  = "/";
         int    ftp_port  = 21;
+        string proxy_url = "http://alternativebits.com/wos.php";
     };
 
     static NetConfig loadConfig();

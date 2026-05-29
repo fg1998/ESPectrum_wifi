@@ -3152,12 +3152,12 @@ void OSD::do_OSD(fabgl::VirtualKey KeytoESP, bool CTRL, bool SHIFT) {
                         menu_saverect = false;
                     }
                     else if (net_num == 2) {
-                        NetworkMenu::ftpConfig();
+                        NetworkMenu::proxyConfig();
                         menu_curopt = 2;
                         menu_saverect = false;
                     }
                     else if (net_num == 3) {
-                        NetworkMenu::ftpBrowser();
+                        NetworkMenu::wosSearch();
                         menu_curopt = 3;
                         menu_saverect = false;
                         if (NetworkMenu::shouldExitOsdAfterLoad()) {

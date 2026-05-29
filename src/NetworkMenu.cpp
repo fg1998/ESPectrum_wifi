@@ -61,6 +61,7 @@ using namespace std;
 #define NVS_FTP_PASS  "ftp_pass"
 #define NVS_FTP_PATH  "ftp_path"
 #define NVS_FTP_PORT  "ftp_port"
+#define NVS_PROXY_URL "proxy_url"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statics
@@ -289,6 +290,8 @@ NetworkMenu::NetConfig NetworkMenu::loadConfig() {
     nvs_get_u32(h, NVS_FTP_PORT, &port);
     cfg.ftp_port = (int)port;
 
+    cfg.proxy_url = nvsGetStr(h, NVS_PROXY_URL, "http://alternativebits.com/wos.php");
+
     nvs_close(h);
     return cfg;
 }
@@ -306,6 +309,7 @@ void NetworkMenu::saveConfig(const NetConfig &cfg) {
     nvs_set_str(h, NVS_FTP_PASS,  cfg.ftp_pass.c_str());
     nvs_set_str(h, NVS_FTP_PATH,  cfg.ftp_path.c_str());
     nvs_set_u32(h, NVS_FTP_PORT,  (uint32_t)cfg.ftp_port);
+    nvs_set_str(h, NVS_PROXY_URL,  cfg.proxy_url.c_str());
 
     nvs_commit(h);
     nvs_close(h);
@@ -1056,6 +1060,36 @@ void NetworkMenu::wifiConfig() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Menu: Configurar Proxy (URL completa do wos.php)
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Sanitiza URL — aceita caracteres validos de URL (mais permissivo que host)
+static string sanitizeUrl(const string &s, size_t maxLen) {
+    string out;
+    for (unsigned char c : s) {
+        // imprimiveis, sem espacos nem aspas
+        if (c >= 33 && c <= 126 && c != '"' && c != '\'' && c != '\\') {
+            out += (char)c;
+            if (out.size() >= maxLen) break;
+        }
+    }
+    return out;
+}
+
+void NetworkMenu::proxyConfig() {
+    NetConfig cfg = loadConfig();
+
+    string url = OSD::input(3, 3, NET_LBL_PROXY[Config::lang],
+        cfg.proxy_url, 20, 96, zxColor(7,1), zxColor(1,0), false);
+    if (url.empty()) return; // ESC
+    cfg.proxy_url = sanitizeUrl(url, 96);
+    if (cfg.proxy_url.empty()) return;
+
+    saveConfig(cfg);
+    OSD::osdCenteredMsg(NET_MSG_WIFI_SAVED[Config::lang], LEVEL_OK, 1000);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Menu: Configurar FTP
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -1096,6 +1130,24 @@ void NetworkMenu::ftpConfig() {
 // Buffer global para HTTP (PSRAM) — evita alocação no stack
 static uint8_t *s_http_buf = nullptr;
 static size_t   s_http_len = 0;
+
+// URL-encode: escapa espacos e caracteres especiais
+static string urlEncode(const string &s) {
+    static const char hex[] = "0123456789ABCDEF";
+    string out;
+    out.reserve(s.size() * 3);
+    for (unsigned char c : s) {
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += hex[c >> 4];
+            out += hex[c & 0x0f];
+        }
+    }
+    return out;
+}
 
 static esp_err_t wos_http_event(esp_http_client_event_t *evt) {
     switch (evt->event_id) {
@@ -1149,9 +1201,22 @@ struct WosTitle {
 };
 
 void NetworkMenu::wosSearch() {
-    // Campo de busca
+    // Le URL base do proxy do NVS
+    NetConfig ncfg = loadConfig();
+    const string proxy = ncfg.proxy_url.empty()
+        ? string("http://alternativebits.com/wos.php")
+        : ncfg.proxy_url;
+
+    // Garante WiFi conectado antes de buscar
+    if (!ensureWifiReady(ncfg.wifi_ssid, ncfg.wifi_pass)) {
+        ESP_LOGE("NET", "WiFi indisponivel");
+        OSD::osdCenteredMsg(NET_MSG_FTP_NOWIFI[Config::lang], LEVEL_ERROR, 2000);
+        return;
+    }
+
+    // Campo de busca — input dentro do menu Acesso Rede que ainda esta ativo
     string term = OSD::input(3, 3,
-        "WoS: ", "",
+        Config::lang == 0 ? "Title: " : "Titulo: ", "",
         20, 32, zxColor(7,1), zxColor(1,0), false);
     if (term.empty()) return;
 
@@ -1163,11 +1228,12 @@ void NetworkMenu::wosSearch() {
     }
     s_http_len = 0;
 
-    // Busca na API
-    char url[256];
+    // Busca na API (via proxy configurado)
+    string term_enc = urlEncode(term);
+    char url[320];
     snprintf(url, sizeof(url),
-        "http://alternativebits.com/wos.php?action=search&title=%s",
-        term.c_str());
+        "%s?action=search&title=%s",
+        proxy.c_str(), term_enc.c_str());
 
     showWifiStatusOverlay("Buscando WoS...", LEVEL_INFO);
 
@@ -1178,6 +1244,13 @@ void NetworkMenu::wosSearch() {
     cfg.buffer_size    = 2048;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE("WOS", "esp_http_client_init falhou para url=%s", url);
+        hideWifiStatusOverlay();
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("URL invalida", LEVEL_ERROR, 1500);
+        return;
+    }
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     ESP_LOGI("WOS", "Busca HTTP err=%d status=%d len=%u url=%s", (int)err, status, (unsigned)s_http_len, url);
@@ -1244,13 +1317,20 @@ void NetworkMenu::wosSearch() {
 
     // Busca versões e arquivos
     snprintf(url, sizeof(url),
-        "http://alternativebits.com/wos.php?action=versions&sid=%d",
-        chosen.id);
+        "%s?action=versions&sid=%d",
+        proxy.c_str(), chosen.id);
 
     s_http_len = 0;
     cfg.url = url;
     showWifiStatusOverlay("Buscando versoes...", LEVEL_INFO);
     client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE("WOS", "init falhou para url=%s", url);
+        hideWifiStatusOverlay();
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("URL invalida", LEVEL_ERROR, 1500);
+        return;
+    }
     err = esp_http_client_perform(client);
     status = esp_http_client_get_status_code(client);
     ESP_LOGI("WOS", "Versoes HTTP err=%d status=%d len=%u url=%s", (int)err, status, (unsigned)s_http_len, url);
@@ -1311,7 +1391,7 @@ void NetworkMenu::wosSearch() {
     if (res != DLG_YES) return;
 
     // Download do ZIP
-    string dl_url = string("http://alternativebits.com/wos.php?action=download&file=") + file_zip;
+    string dl_url = proxy + "?action=download&file=" + file_zip;
     ESP_LOGI("WOS", "Download: %s", dl_url.c_str());
 
     s_http_buf = (uint8_t *)heap_caps_malloc(512 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1324,6 +1404,13 @@ void NetworkMenu::wosSearch() {
     showWifiStatusOverlay("Baixando...", LEVEL_INFO);
     cfg.url = dl_url.c_str();
     client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE("WOS", "init falhou para url=%s", dl_url.c_str());
+        hideWifiStatusOverlay();
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("URL invalida", LEVEL_ERROR, 1500);
+        return;
+    }
     err = esp_http_client_perform(client);
     esp_http_client_cleanup(client);
     hideWifiStatusOverlay();
@@ -1358,23 +1445,6 @@ void NetworkMenu::wosSearch() {
     }
 
     OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_OK[Config::lang], LEVEL_OK, 1500);
-
-    if (netFileIsGame(dest)) {
-        uint8_t load = OSD::msgDialog(
-            NET_DLG_LOAD_GAME[Config::lang],
-            chosen.title.substr(0, 34),
-            MSGDIALOG_YESNO
-        );
-        if (load == DLG_YES) {
-            restoreAfterNetwork();
-            if (netLoadDownloadedFile(dest)) {
-                s_exit_osd_after_load = true;
-                OSD::restoreBackbufferData();
-            } else {
-                OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
-            }
-        }
-    }
 }
 
 void NetworkMenu::ftpBrowser() {
