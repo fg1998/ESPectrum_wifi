@@ -45,6 +45,9 @@ Inclua em OSDMain.cpp: #include "NetworkMenu.h"
 #include <vector>
 
 #include <dirent.h>
+#include "esp_http_client.h"
+// miniz nao e mais necessario — descompressao feita no proxy PHP
+
 using namespace std;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1087,175 +1090,319 @@ void NetworkMenu::ftpConfig() {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// FTP Search — busca por nome no servidor (NLST com wildcard)
+// World of Spectrum Search — busca via API HTTP + download direto
 // ═════════════════════════════════════════════════════════════════════════════
 
-void NetworkMenu::ftpSearch(int ctrl, const string &base_path) {
+// Buffer global para HTTP (PSRAM) — evita alocação no stack
+static uint8_t *s_http_buf = nullptr;
+static size_t   s_http_len = 0;
+
+static esp_err_t wos_http_event(esp_http_client_event_t *evt) {
+    switch (evt->event_id) {
+    case HTTP_EVENT_ON_DATA:
+        if (s_http_buf && (s_http_len + evt->data_len) < (512 * 1024)) {
+            memcpy(s_http_buf + s_http_len, evt->data, evt->data_len);
+            s_http_len += evt->data_len;
+        }
+        break;
+    default:
+        break;
+    }
+    return ESP_OK;
+}
+
+// Extrai valor de string de JSON simples: "key":"value"
+static string jsonGetStr(const char *json, const char *key) {
+    string k = string("\"") + key + "\":\"";
+    const char *p = strstr(json, k.c_str());
+    if (!p) return "";
+    p += k.size();
+    const char *e = strchr(p, '"');
+    if (!e) return "";
+    string val(p, e - p);
+    // Unescape \/ -> /
+    string out;
+    for (size_t i = 0; i < val.size(); i++) {
+        if (val[i] == '\\' && i+1 < val.size() && val[i+1] == '/') {
+            out += '/'; i++;
+        } else {
+            out += val[i];
+        }
+    }
+    return out;
+}
+
+// Extrai valor inteiro: "key":123
+static int jsonGetInt(const char *json, const char *key) {
+    string k = string("\"") + key + "\":";
+    const char *p = strstr(json, k.c_str());
+    if (!p) return 0;
+    p += k.size();
+    return atoi(p);
+}
+
+struct WosTitle {
+    int    id;
+    string title;
+    string file_tap;   // path do TAP ou TZX (sem zip)
+    string file_zip;   // path do zip
+};
+
+void NetworkMenu::wosSearch() {
+    // Campo de busca
     string term = OSD::input(3, 3,
-        "Buscar: ", "",
+        "WoS: ", "",
         20, 32, zxColor(7,1), zxColor(1,0), false);
     if (term.empty()) return;
 
-    // Muda para o diretório base
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "CWD %s", base_path.c_str());
-    ftpSendCmd(ctrl, cmd);
-    ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
-
-    int dsock = ftpPasv(ctrl);
-    if (dsock < 0) {
-        OSD::osdCenteredMsg("Erro PASV", LEVEL_ERROR, 1500);
+    // Aloca buffer HTTP na PSRAM
+    s_http_buf = (uint8_t *)heap_caps_malloc(512 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_http_buf) {
+        OSD::osdCenteredMsg("Sem memoria PSRAM", LEVEL_ERROR, 1500);
         return;
     }
+    s_http_len = 0;
 
-    showWifiStatusOverlay("Buscando...", LEVEL_INFO);
+    // Busca na API
+    char url[256];
+    snprintf(url, sizeof(url),
+        "http://alternativebits.com/wos.php?action=search&title=%s",
+        term.c_str());
 
-    snprintf(cmd, sizeof(cmd), "NLST *%s*", term.c_str());
-    //snprintf(cmd, sizeof(cmd), "NLST");
+    showWifiStatusOverlay("Buscando WoS...", LEVEL_INFO);
 
-    ESP_LOGI("FTP", "Enviando comando: %s", cmd);
-    ftpSendCmd(ctrl, cmd);
-    int code = ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
-    ESP_LOGI("FTP", "Resposta: %d %s", code, ftp_resp);
+    esp_http_client_config_t cfg = {};
+    cfg.url            = url;
+    cfg.event_handler  = wos_http_event;
+    cfg.timeout_ms     = 10000;
+    cfg.buffer_size    = 2048;
 
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    ESP_LOGI("WOS", "Busca HTTP err=%d status=%d len=%u url=%s", (int)err, status, (unsigned)s_http_len, url);
+    esp_http_client_cleanup(client);
     hideWifiStatusOverlay();
 
-    if (code != 125 && code != 150) {
-        close(dsock);
-        OSD::osdCenteredMsg("Nenhum resultado", LEVEL_WARN, 1500);
+    if (err != ESP_OK || s_http_len == 0) {
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("Erro HTTP busca", LEVEL_ERROR, 1500);
         return;
     }
+    s_http_buf[s_http_len] = 0;
+    ESP_LOGI("WOS", "Busca OK: %u bytes", (unsigned)s_http_len);
 
-    // Le resultados — maximo 10
-    vector<string> results;
-    char lbuf[512];
-    int pos = 0;
-    char c;
-    while (results.size() < 10) {
-        int r = recv(dsock, &c, 1, 0);
-        if (r <= 0) break;
-        if (c == '\n') {
-            if (pos > 0 && lbuf[pos-1] == '\r') pos--;
-            lbuf[pos] = 0;
-            if (pos > 0) {
-                string entry(lbuf);
-                size_t sl = entry.rfind('/');
-                if (sl != string::npos) entry = entry.substr(sl + 1);
-                if (!entry.empty()) results.push_back(entry);
-            }
-            pos = 0;
-        } else {
-            if (pos < 511) lbuf[pos++] = c;
+    // Parseia títulos — extrai id e title
+    // Procura "id": seguido de digito (evita "turn_type_id":null etc)
+    vector<WosTitle> titles;
+    const char *p = (const char *)s_http_buf;
+    while (titles.size() < 10) {
+        const char *tid = strstr(p, "\"id\":");
+        if (!tid) break;
+        const char *idval = tid + 5;
+        // pula espacos
+        while (*idval == ' ') idval++;
+        // so aceita se for digito (id de jogo e numero puro: "id":10595)
+        if (*idval < '0' || *idval > '9') {
+            p = tid + 5;
+            continue;
         }
+        int id = atoi(idval);
+        const char *ttl = strstr(tid, "\"title\":\"");
+        if (!ttl) break;
+        ttl += 9;
+        const char *te = strchr(ttl, '"');
+        if (!te) break;
+        WosTitle wt;
+        wt.id = id;
+        wt.title = string(ttl, te - ttl);
+        titles.push_back(wt);
+        p = te + 1;
     }
-    close(dsock);
-    ftpGetResponse(ctrl, ftp_resp, sizeof(ftp_resp));
 
-    if (results.empty()) {
-        OSD::osdCenteredMsg("Nenhum resultado", LEVEL_WARN, 1500);
+    if (titles.empty()) {
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("Sem resultados", LEVEL_WARN, 1500);
         return;
     }
 
-    // Monta menu com resultados
-    string smenu = "Resultados\n";
-    for (const string &r : results)
-        smenu += r.substr(0, 38) + "\n";
+    // Menu de títulos
+    string smenu = "World of Spectrum\n";
+    for (auto &t : titles)
+        smenu += t.title.substr(0, 36) + "\n";
 
     OSD::menu_level    = 1;
     OSD::menu_curopt   = 1;
     OSD::menu_saverect = true;
-
     uint8_t sel = OSD::menuRun(smenu);
-    if (sel == 0) return;
+    if (sel == 0) {
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        return;
+    }
 
-    int idx = sel - 1;
-    if (idx < 0 || idx >= (int)results.size()) return;
+    WosTitle &chosen = titles[sel - 1];
 
-    string selected  = results[idx];
-    string full_path = base_path;
-    if (full_path.back() != '/') full_path += '/';
-    full_path += selected;
+    // Busca versões e arquivos
+    snprintf(url, sizeof(url),
+        "http://alternativebits.com/wos.php?action=versions&sid=%d",
+        chosen.id);
 
+    s_http_len = 0;
+    cfg.url = url;
+    showWifiStatusOverlay("Buscando versoes...", LEVEL_INFO);
+    client = esp_http_client_init(&cfg);
+    err = esp_http_client_perform(client);
+    status = esp_http_client_get_status_code(client);
+    ESP_LOGI("WOS", "Versoes HTTP err=%d status=%d len=%u url=%s", (int)err, status, (unsigned)s_http_len, url);
+    esp_http_client_cleanup(client);
+    hideWifiStatusOverlay();
+
+    if (err != ESP_OK || s_http_len == 0) {
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("Erro HTTP versoes", LEVEL_ERROR, 1500);
+        return;
+    }
+    s_http_buf[s_http_len] = 0;
+
+    // Procura primeiro TAP ou TZX zip
+    string file_zip;
+    string file_name;
+    const char *fp = (const char *)s_http_buf;
+    while (true) {
+        const char *fid = strstr(fp, "\"file_id\":\"");
+        if (!fid) break;
+        fid += 11;
+        const char *fe = strchr(fid, '"');
+        if (!fe) break;
+        string fpath(fid, fe - fid);
+        // Unescape
+        string clean;
+        for (size_t i = 0; i < fpath.size(); i++) {
+            if (fpath[i] == '\\' && i+1 < fpath.size() && fpath[i+1] == '/') {
+                clean += '/'; i++;
+            } else clean += fpath[i];
+        }
+        // Pega TAP ou TZX zip
+        string lc = clean;
+        for (auto &ch : lc) ch = tolower(ch);
+        if ((lc.find(".tap.zip") != string::npos || lc.find(".tzx.zip") != string::npos)) {
+            file_zip = clean;
+            // Nome do arquivo sem .zip
+            file_name = clean.substr(clean.rfind('/') + 1);
+            file_name = file_name.substr(0, file_name.size() - 4); // remove .zip
+            break;
+        }
+        fp = fe + 1;
+    }
+
+    heap_caps_free(s_http_buf); s_http_buf = nullptr;
+
+    if (file_zip.empty()) {
+        OSD::osdCenteredMsg("Sem arquivo TAP/TZX", LEVEL_WARN, 1500);
+        return;
+    }
+
+    // Confirma download
     uint8_t res = OSD::msgDialog(
         NET_DLG_DOWNLOAD[Config::lang],
-        selected.substr(0, 34),
+        chosen.title.substr(0, 34),
         MSGDIALOG_YESNO
     );
     if (res != DLG_YES) return;
 
-    const string dest = netFtpDestPath(selected);
-    if (ftpDownload(ctrl, full_path, dest)) {
-        OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_OK[Config::lang], LEVEL_OK, 1500);
-        if (netFileIsGame(dest)) {
-            uint8_t load = OSD::msgDialog(
-                NET_DLG_LOAD_GAME[Config::lang],
-                selected.substr(0, 34),
-                MSGDIALOG_YESNO
-            );
-            if (load == DLG_YES) {
-                restoreAfterNetwork();
-                if (netLoadDownloadedFile(dest)) {
-                    s_exit_osd_after_load = true;
-                } else {
-                    OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
-                }
+    // Download do ZIP
+    string dl_url = string("http://alternativebits.com/wos.php?action=download&file=") + file_zip;
+    ESP_LOGI("WOS", "Download: %s", dl_url.c_str());
+
+    s_http_buf = (uint8_t *)heap_caps_malloc(512 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_http_buf) {
+        OSD::osdCenteredMsg("Sem memoria PSRAM", LEVEL_ERROR, 1500);
+        return;
+    }
+    s_http_len = 0;
+
+    showWifiStatusOverlay("Baixando...", LEVEL_INFO);
+    cfg.url = dl_url.c_str();
+    client = esp_http_client_init(&cfg);
+    err = esp_http_client_perform(client);
+    esp_http_client_cleanup(client);
+    hideWifiStatusOverlay();
+
+    if (err != ESP_OK || s_http_len == 0) {
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("Erro download", LEVEL_ERROR, 1500);
+        return;
+    }
+
+    ESP_LOGI("WOS", "Arquivo recebido: %u bytes", (unsigned)s_http_len);
+
+    // O proxy ja descomprimiu o ZIP e devolveu o .tap/.tzx puro.
+    // Diagnostico: se vier "NOT FOUND" ou texto curto, e erro do proxy.
+    if (s_http_len < 16) {
+        s_http_buf[s_http_len] = 0;
+        ESP_LOGE("WOS", "Resposta invalida: %s", (char *)s_http_buf);
+        heap_caps_free(s_http_buf); s_http_buf = nullptr;
+        OSD::osdCenteredMsg("Download invalido", LEVEL_ERROR, 2000);
+        return;
+    }
+
+    // Grava no SD direto (sem descompressao — o proxy ja entregou o .tap)
+    const string dest = netFtpDestPath(file_name);
+    bool first = true;
+    bool ok = netFlushToSd(dest, s_http_buf, s_http_len, first);
+    heap_caps_free(s_http_buf); s_http_buf = nullptr;
+
+    if (!ok) {
+        OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
+        return;
+    }
+
+    OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_OK[Config::lang], LEVEL_OK, 1500);
+
+    if (netFileIsGame(dest)) {
+        uint8_t load = OSD::msgDialog(
+            NET_DLG_LOAD_GAME[Config::lang],
+            chosen.title.substr(0, 34),
+            MSGDIALOG_YESNO
+        );
+        if (load == DLG_YES) {
+            restoreAfterNetwork();
+            if (netLoadDownloadedFile(dest)) {
+                s_exit_osd_after_load = true;
+                OSD::restoreBackbufferData();
+            } else {
+                OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
             }
         }
-    } else {
-        OSD::osdCenteredMsg(NET_MSG_DOWNLOAD_FAIL[Config::lang], LEVEL_ERROR, 2000);
     }
 }
 
 void NetworkMenu::ftpBrowser() {
     NetConfig cfg = loadConfig();
 
-    ESP_LOGI("FTP", "ftpBrowser host='%s' port=%d", cfg.ftp_host.c_str(), cfg.ftp_port);
-
-    if (cfg.ftp_host.empty()) {
-        OSD::osdCenteredMsg(NET_MSG_FTP_NOCONFIG[Config::lang], LEVEL_WARN, 2000);
-        return;
-    }
-
+    // Conecta WiFi primeiro
     if (!ensureWifiReady(cfg.wifi_ssid, cfg.wifi_pass)) {
-        ESP_LOGE("FTP", "WiFi indisponivel");
+        ESP_LOGE("NET", "WiFi indisponivel");
         OSD::osdCenteredMsg(NET_MSG_FTP_NOWIFI[Config::lang], LEVEL_ERROR, 2000);
         return;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(300));
-
-    showWifiStatusOverlay(NET_MSG_FTP_CONNECTING[Config::lang], LEVEL_INFO);
-
-    int ctrl = ftpConnect(cfg.ftp_host, cfg.ftp_port, cfg.ftp_user, cfg.ftp_pass);
-
-    hideWifiStatusOverlay();
-
-    if (ctrl < 0) {
-        ESP_LOGE("FTP", "ftpConnect falhou");
-        OSD::osdCenteredMsg(NET_MSG_FTP_FAIL[Config::lang], LEVEL_ERROR, 2000);
-        return;
-    }
-
-    string cur_path = cfg.ftp_path;
-    // Remove trailing slash (exceto raiz)
-    while (cur_path.size() > 1 && cur_path.back() == '/') cur_path.pop_back();
-
-    // Menu: Navegar ou Buscar
+    // Menu principal de rede — sem FTP
     {
         OSD::menu_level    = 1;
         OSD::menu_curopt   = 1;
         OSD::menu_saverect = true;
-        uint8_t mode = OSD::menuRun("Acesso FTP\nNavegar\nBuscar arquivo\n");
-        if (mode == 0) {
-            ftpDisconnect(ctrl);
-            return;
-        }
-        if (mode == 2) {
-            ftpSearch(ctrl, cur_path);
-            ftpDisconnect(ctrl);
-            return;
-        }
+        uint8_t mode = OSD::menuRun("Acesso Rede\nConfig. WiFi\nBuscar WoS\n");
+        if (mode == 0) return;
+        if (mode == 1) { wifiConfig(); return; }
+        if (mode == 2) { wosSearch();  return; }
+        return;
     }
+
+    // Código FTP abaixo não acessível pelo menu mas mantido para compilar
+    int ctrl = -1;
+    string cur_path = cfg.ftp_path;
+    while (cur_path.size() > 1 && cur_path.back() == '/') cur_path.pop_back();
 
     while (true) {
         showWifiStatusOverlay(NET_MSG_FTP_LISTING[Config::lang], LEVEL_INFO);

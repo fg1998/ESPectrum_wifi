@@ -36,7 +36,8 @@ To Contact the dev team you can write to zxespectrum@gmail.com
 #define ESPectrum_hardpins_h
 
 // Audio Out
-#define SPEAKER_PIN 25
+//#define SPEAKER_PIN 25
+#define SPEAKER_PIN 39
 
 // PS/2 (fabGL library) GPIOs
 // Allowed GPIOs: GPIO_NUM_0, GPIO_NUM_2, GPIO_NUM_4, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, GPIO_NUM_15, GPIO_NUM_25, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_32, GPIO_NUM_33

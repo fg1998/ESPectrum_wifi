@@ -19,6 +19,8 @@ public:
     static void wifiConfig();
     static void ftpConfig();
     static void ftpBrowser();
+    static void wosSearch();
+    static void ftpSearch(int ctrl, const string &base_path);
 
     static bool wifi_connected; // exposto para o event handler
 
@@ -66,7 +68,6 @@ private:
     static bool ftpReadLine(int sock, char *buf, int maxlen);
     static int  ftpGetResponse(int sock, char *rbuf, int rlen);
     static bool ftpSendCmd(int sock, const char *cmd);
-    static void ftpSearch(int ctrl, const string &base_path);
 };
 
 #endif // ESPECTRUM_NETWORKMENU_H
